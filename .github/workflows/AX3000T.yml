@@ -1,0 +1,77 @@
+name: Build U-Boot for Xiaomi Mi Router AX3000T
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      ssh:
+        description: "SSH connection to Actions"
+        required: false
+        default: "false"
+  # schedule:
+  #   - cron: 0 0 2 * *
+
+env:
+  REPO_URL: https://github.com/hanwckf/bl-mt798x
+  REPO_BRANCH: master
+  UPLOAD_U-BOOT: true
+  UPLOAD_RELEASE: false
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo apt install gcc-aarch64-linux-gnu build-essential flex bison libssl-dev
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+      - name: Clone source code
+        working-directory: /workdir
+        run: |
+          df -hT $PWD
+          git clone $REPO_URL -b $REPO_BRANCH bl-mt798x
+          ln -sf /workdir/bl-mt798x $GITHUB_WORKSPACE/bl-mt798x
+
+      - name: Build the U-Boot
+        id: compile
+        run: |
+          cd bl-mt798x
+          SOC=mt7981 BOARD=ax3000t MULTI_LAYOUT=1 ./build.sh
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "AX3000T" > DEVICE_NAME
+          [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+          echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+      - name: Organize files
+        id: organize
+        if: env.UPLOAD_U-BOOT == 'true' && !cancelled()
+        run: |
+          cd bl-mt798x/output/
+          sha256sum mt798* > sha256sum
+          echo "UBOOT=$PWD" >> $GITHUB_ENV
+          echo "status=success" >> $GITHUB_OUTPUT
+      - name: Upload the U-Boot
+        uses: actions/upload-artifact@main
+        if: steps.organize.outputs.status == 'success' && !cancelled()
+        with:
+          name: U-Boot${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+          path: ${{ env.UBOOT }}
+
+      - name: Delete workflow runs
+        uses: Mattraks/delete-workflow-runs@v2
+        with:
+          token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          retain_days: 30
+          keep_minimum_runs: 2
+
